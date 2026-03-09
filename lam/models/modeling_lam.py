@@ -33,30 +33,31 @@ class ModelLAM(nn.Module):
     """
     Full model of the basic single-view large reconstruction model.
     """
-    def __init__(self,
-                 transformer_dim: int, transformer_layers: int, transformer_heads: int,
-                 transformer_type="cond",
-                 tf_grad_ckpt=False,
-                 encoder_grad_ckpt=False,
-                 encoder_freeze: bool = True, encoder_type: str = 'dino',
-                 encoder_model_name: str = 'facebook/dino-vitb16', encoder_feat_dim: int = 768,
-                 num_pcl: int=2048, pcl_dim: int=512,
-                 human_model_path="./model_zoo/human_parametric_models",
-                 flame_subdivide_num=2,
-                 flame_type="flame",
-                 gs_query_dim=None,
-                 gs_use_rgb=False,
-                 gs_sh=3,
-                 gs_mlp_network_config=None,
-                 gs_xyz_offset_max_step=1.8 / 32,
-                 gs_clip_scaling=0.2,
-                 shape_param_dim=100,
-                 expr_param_dim=50,
-                 fix_opacity=False,
-                 fix_rotation=False,
-                 flame_scale=1.0,
-                 **kwargs,
-                 ):
+    def __init__(
+        self,
+        transformer_dim: int, transformer_layers: int, transformer_heads: int,
+        transformer_type="cond",
+        tf_grad_ckpt=False,
+        encoder_grad_ckpt=False,
+        encoder_freeze: bool = True, encoder_type: str = 'dino',
+        encoder_model_name: str = 'facebook/dino-vitb16', encoder_feat_dim: int = 768,
+        num_pcl: int=2048, pcl_dim: int=512,
+        human_model_path="./model_zoo/human_parametric_models",
+        flame_subdivide_num=2,
+        flame_type="flame",
+        gs_query_dim=None,
+        gs_use_rgb=False,
+        gs_sh=3,
+        gs_mlp_network_config=None,
+        gs_xyz_offset_max_step=1.8 / 32,
+        gs_clip_scaling=0.2,
+        shape_param_dim=100,
+        expr_param_dim=50,
+        fix_opacity=False,
+        fix_rotation=False,
+        flame_scale=1.0,
+        **kwargs,
+    ):
         super().__init__()
         self.gradient_checkpointing = tf_grad_ckpt
         self.encoder_gradient_checkpointing = encoder_grad_ckpt
@@ -81,9 +82,16 @@ class ModelLAM(nn.Module):
             self.num_pcl = num_pcl
             self.pcl_embeddings = nn.Embedding(num_pcl , pcl_dim)
         elif self.latent_query_points_type.startswith("flame"):
-            latent_query_points_file = os.path.join(human_model_path, "flame_points", f"{self.latent_query_points_type}.npy")
-            pcl_embeddings = torch.from_numpy(np.load(latent_query_points_file)).float()
+            latent_query_points_file = os.path.join(
+                human_model_path, 
+                "flame_points", 
+                f"{self.latent_query_points_type}.npy",
+            )
+            pcl_embeddings = torch.from_numpy(
+                np.load(latent_query_points_file)
+            ).float()
             print(f"==========load flame points:{latent_query_points_file}, shape:{pcl_embeddings.shape}")
+
             self.register_buffer("pcl_embeddings", pcl_embeddings)
             self.pcl_embed = PointEmbed(dim=pcl_dim)
         elif self.latent_query_points_type.startswith("e2e_flame"):
@@ -95,8 +103,11 @@ class ModelLAM(nn.Module):
         # transformer
         self.transformer = TransformerDecoder(
             block_type=transformer_type,
-            num_layers=transformer_layers, num_heads=transformer_heads,
-            inner_dim=transformer_dim, cond_dim=encoder_feat_dim, mod_dim=None,
+            num_layers=transformer_layers, 
+            num_heads=transformer_heads,
+            inner_dim=transformer_dim, 
+            cond_dim=encoder_feat_dim, 
+            mod_dim=None,
             gradient_checkpointing=self.gradient_checkpointing,
         )
         
@@ -186,12 +197,22 @@ class ModelLAM(nn.Module):
         image_feats = self.forward_encode_image(image)
         
         assert image_feats.shape[-1] == self.encoder_feat_dim, \
-            f"Feature dimension mismatch: {image_feats.shape[-1]} vs {self.encoder_feat_dim}"
+            f"Feature dimension mismatch: {image_feats.shape[-1]}" \
+            f" vs {self.encoder_feat_dim}"
 
         if additional_features is not None and len(additional_features.keys()) > 0:
-            image_feats_bchw = rearrange(image_feats, "b (h w) c -> b c h w", h=int(math.sqrt(image_feats.shape[1])))
+            image_feats_bchw = rearrange(
+                image_feats, 
+                "b (h w) c -> b c h w", 
+                h=int(math.sqrt(image_feats.shape[1])),
+            )
             additional_features["source_image_feats"] = image_feats_bchw
-            proj_feats = self.renderer.get_batch_project_feats(None, query_points, additional_features=additional_features, feat_nms=['source_image_feats'], use_mesh=True)
+            proj_feats = self.renderer.get_batch_project_feats(
+                None, query_points, 
+                additional_features=additional_features, 
+                feat_nms=['source_image_feats'], 
+                use_mesh=True,
+            )
             query_feats = proj_feats['source_image_feats']
         else:
             query_feats = None
@@ -201,11 +222,28 @@ class ModelLAM(nn.Module):
         #     f"Feature dimension mismatch: {camera_embeddings.shape[-1]} vs {self.camera_embed_dim}"
 
         # transformer generating latent points
-        tokens = self.forward_transformer(image_feats, camera_embeddings=None, query_points=query_points, query_feats=query_feats)
+        tokens = self.forward_transformer(
+            image_feats, 
+            camera_embeddings=None, 
+            query_points=query_points, 
+            query_feats=query_feats,
+        )
 
         return tokens, image_feats
 
-    def forward(self, image, source_c2ws, source_intrs, render_c2ws, render_intrs, render_bg_colors, flame_params, source_flame_params=None, render_images=None, data=None):
+    def forward(
+        self, 
+        image, 
+        source_c2ws, 
+        source_intrs, 
+        render_c2ws, 
+        render_intrs, 
+        render_bg_colors, 
+        flame_params, 
+        source_flame_params=None, 
+        render_images=None, 
+        data=None,
+    ):
         # image: [B, N_ref, C_img, H_img, W_img]
         # source_c2ws: [B, N_ref, 4, 4]
         # source_intrs: [B, N_ref, 4, 4]
@@ -213,43 +251,61 @@ class ModelLAM(nn.Module):
         # render_intrs: [B, N_source, 4, 4]
         # render_bg_colors: [B, N_source, 3]
         # flame_params: Dict, e.g., pose_shape: [B, N_source, 21, 3], betas:[B, 100]
-        assert image.shape[0] == render_c2ws.shape[0], "Batch size mismatch for image and render_c2ws"
-        assert image.shape[0] == render_bg_colors.shape[0], "Batch size mismatch for image and render_bg_colors"
-        assert image.shape[0] == flame_params["betas"].shape[0], "Batch size mismatch for image and flame_params"
-        assert image.shape[0] == flame_params["expr"].shape[0], "Batch size mismatch for image and flame_params"
+        assert image.shape[0] == render_c2ws.shape[0], \
+            "Batch size mismatch for image and render_c2ws"
+        assert image.shape[0] == render_bg_colors.shape[0], \
+            "Batch size mismatch for image and render_bg_colors"
+        assert image.shape[0] == flame_params["betas"].shape[0], \
+            "Batch size mismatch for image and flame_params"
+        assert image.shape[0] == flame_params["expr"].shape[0], \
+            "Batch size mismatch for image and flame_params"
         assert len(flame_params["betas"].shape) == 2
         render_h, render_w = int(render_intrs[0, 0, 1, 2] * 2), int(render_intrs[0, 0, 0, 2] * 2)
         query_points = None
 
         if self.latent_query_points_type.startswith("e2e_flame"):
-            query_points, flame_params = self.renderer.get_query_points(flame_params,
-                                                                        device=image.device)
+            query_points, flame_params = self.renderer.get_query_points(
+                flame_params,
+                device=image.device
+            )
 
         additional_features = {}
                                                           
-        latent_points, image_feats = self.forward_latent_points(image[:, 0], camera=None, query_points=query_points, additional_features=additional_features)  # [B, N, C]
+        latent_points, image_feats = self.forward_latent_points(
+            image[:, 0], 
+            camera=None, 
+            query_points=query_points, 
+            additional_features=additional_features,
+        )  # [B, N, C]
 
         additional_features.update({
             "image_feats": image_feats, "image": image[:, 0], 
         })
-        image_feats_bchw = rearrange(image_feats, "b (h w) c -> b c h w", h=int(math.sqrt(image_feats.shape[1])))
+        image_feats_bchw = rearrange(
+            image_feats, 
+            "b (h w) c -> b c h w", 
+            h=int(math.sqrt(image_feats.shape[1])),
+        )
         additional_features["image_feats_bchw"] = image_feats_bchw
 
         # render target views
-        render_results = self.renderer(gs_hidden_features=latent_points,
-                                       query_points=query_points,
-                                       flame_data=flame_params,
-                                       c2w=render_c2ws,
-                                       intrinsic=render_intrs,
-                                       height=render_h,
-                                       width=render_w,
-                                       background_color=render_bg_colors,
-                                       additional_features=additional_features
+        render_results = self.renderer(
+            gs_hidden_features=latent_points,
+            query_points=query_points,
+            flame_data=flame_params,
+            c2w=render_c2ws,
+            intrinsic=render_intrs,
+            height=render_h,
+            width=render_w,
+            background_color=render_bg_colors,
+            additional_features=additional_features,
         )
 
         N, M = render_c2ws.shape[:2]
-        assert render_results['comp_rgb'].shape[0] in [N, N], "Batch size mismatch for render_results"
-        assert render_results['comp_rgb'].shape[1] in [M, M*2], "Number of rendered views should be consistent with render_cameras"
+        assert render_results['comp_rgb'].shape[0] in [N, N], \
+            "Batch size mismatch for render_results"
+        assert render_results['comp_rgb'].shape[1] in [M, M*2], \
+            "Number of rendered views should be consistent with render_cameras"
 
         if self.use_conf_map:
             b, v = render_images.shape[:2]
@@ -280,8 +336,10 @@ class ModelLAM(nn.Module):
         }
         
     @torch.no_grad()
-    def infer_single_view(self, image, source_c2ws, source_intrs, render_c2ws, 
-                          render_intrs, render_bg_colors, flame_params):
+    def infer_single_view(
+        self, image, source_c2ws, source_intrs, render_c2ws, 
+        render_intrs, render_bg_colors, flame_params,
+    ):
         # image: [B, N_ref, C_img, H_img, W_img]
         # source_c2ws: [B, N_ref, 4, 4]
         # source_intrs: [B, N_ref, 4, 4]
@@ -289,37 +347,58 @@ class ModelLAM(nn.Module):
         # render_intrs: [B, N_source, 4, 4]
         # render_bg_colors: [B, N_source, 3]
         # flame_params: Dict, e.g., pose_shape: [B, N_source, 21, 3], betas:[B, 100]
-        assert image.shape[0] == render_c2ws.shape[0], "Batch size mismatch for image and render_c2ws"
-        assert image.shape[0] == render_bg_colors.shape[0], "Batch size mismatch for image and render_bg_colors"
-        assert image.shape[0] == flame_params["betas"].shape[0], "Batch size mismatch for image and flame_params"
-        assert image.shape[0] == flame_params["expr"].shape[0], "Batch size mismatch for image and flame_params"
+        assert image.shape[0] == render_c2ws.shape[0], \
+            "Batch size mismatch for image and render_c2ws"
+        assert image.shape[0] == render_bg_colors.shape[0], \
+            "Batch size mismatch for image and render_bg_colors"
+        assert image.shape[0] == flame_params["betas"].shape[0], \
+            "Batch size mismatch for image and flame_params"
+        assert image.shape[0] == flame_params["expr"].shape[0], \
+            "Batch size mismatch for image and flame_params"
         assert len(flame_params["betas"].shape) == 2
-        render_h, render_w = int(render_intrs[0, 0, 1, 2] * 2), int(render_intrs[0, 0, 0, 2] * 2)
+        render_h = int(render_intrs[0, 0, 1, 2] * 2)
+        render_w = int(render_intrs[0, 0, 0, 2] * 2)
         assert image.shape[0] == 1
         num_views = render_c2ws.shape[1]
         query_points = None
         
         if self.latent_query_points_type.startswith("e2e_flame"):
-            query_points, flame_params = self.renderer.get_query_points(flame_params,
-                                                                        device=image.device)
-        latent_points, image_feats = self.forward_latent_points(image[:, 0], camera=None, query_points=query_points)  # [B, N, C]
-        image_feats_bchw = rearrange(image_feats, "b (h w) c -> b c h w", h=int(math.sqrt(image_feats.shape[1])))
+            query_points, flame_params = self.renderer.get_query_points(
+                flame_params,
+                device=image.device
+            )
+        latent_points, image_feats = self.forward_latent_points(
+            image[:, 0], camera=None, 
+            query_points=query_points
+        )  # [B, N, C]
+        image_feats_bchw = rearrange(
+            image_feats, "b (h w) c -> b c h w", 
+            h=int(math.sqrt(image_feats.shape[1])),
+        )
 
-        gs_model_list, query_points, flame_params, _ = self.renderer.forward_gs(gs_hidden_features=latent_points,
-                                                query_points=query_points,
-                                                flame_data=flame_params,
-                                                additional_features={"image_feats": image_feats, "image": image[:, 0], "image_feats_bchw": image_feats_bchw})
+        gs_model_list, query_points, flame_params, _ = self.renderer.forward_gs(
+            gs_hidden_features=latent_points,
+            query_points=query_points,
+            flame_data=flame_params,
+            additional_features={
+                "image_feats": image_feats, 
+                "image": image[:, 0], 
+                "image_feats_bchw": image_feats_bchw,
+            }
+        )
 
         render_res_list = []
         for view_idx in range(num_views):
-            render_res = self.renderer.forward_animate_gs(gs_model_list, 
-                                                          query_points,
-                                                          self.renderer.get_single_view_smpl_data(flame_params, view_idx), 
-                                                          render_c2ws[:, view_idx:view_idx+1], 
-                                                          render_intrs[:, view_idx:view_idx+1], 
-                                                          render_h, 
-                                                          render_w, 
-                                                          render_bg_colors[:, view_idx:view_idx+1])
+            render_res = self.renderer.forward_animate_gs(
+                gs_model_list, 
+                query_points,
+                self.renderer.get_single_view_smpl_data(flame_params, view_idx), 
+                render_c2ws[:, view_idx:view_idx+1], 
+                render_intrs[:, view_idx:view_idx+1], 
+                render_h, 
+                render_w, 
+                render_bg_colors[:, view_idx:view_idx+1],
+            )
             render_res_list.append(render_res)
 
         out = defaultdict(list)
@@ -331,7 +410,8 @@ class ModelLAM(nn.Module):
             if isinstance(v[0], torch.Tensor):
                 out[k] = torch.concat(v, dim=1)
                 if k in ["comp_rgb", "comp_mask", "comp_depth"]:
-                    out[k] = out[k][0].permute(0, 2, 3, 1)  # [1, Nv, 3, H, W] -> [Nv, 3, H, W] - > [Nv, H, W, 3] 
+                    # [1, Nv, 3, H, W] -> [Nv, 3, H, W] - > [Nv, H, W, 3]
+                    out[k] = out[k][0].permute(0, 2, 3, 1)   
             else:
                 out[k] = v
         out['cano_gs_lst'] = gs_model_list
