@@ -371,20 +371,20 @@ class ModelLAM(nn.Module):
             image[:, 0], camera=None, 
             query_points=query_points
         )  # [B, N, C]
-        image_feats_bchw = rearrange(
-            image_feats, "b (h w) c -> b c h w", 
-            h=int(math.sqrt(image_feats.shape[1])),
-        )
+        # image_feats_bchw = rearrange(
+        #     image_feats, "b (h w) c -> b c h w", 
+        #     h=int(math.sqrt(image_feats.shape[1])),
+        # )
 
         gs_model_list, query_points, flame_params, _ = self.renderer.forward_gs(
             gs_hidden_features=latent_points,
             query_points=query_points,
             flame_data=flame_params,
-            additional_features={
-                "image_feats": image_feats, 
-                "image": image[:, 0], 
-                "image_feats_bchw": image_feats_bchw,
-            }
+            # additional_features={
+            #     "image_feats": image_feats, 
+            #     "image": image[:, 0], 
+            #     "image_feats_bchw": image_feats_bchw,
+            # }
         )
 
         render_res_list = []

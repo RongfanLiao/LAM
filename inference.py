@@ -42,7 +42,7 @@ def build_model(cfg):
 
     model = ModelLAM(**cfg.model)
     resume = os.path.join(cfg.model_name, "model.safetensors")
-    print("=" * 80)
+    # print("=" * 80)
     print("Loading pretrained weight from:", resume)
     if resume.endswith('safetensors'):
         ckpt = load_file(resume, device='cpu')
@@ -54,11 +54,14 @@ def build_model(cfg):
             if state_dict[k].shape == v.shape:
                 state_dict[k].copy_(v)
             else:
-                print(f"[WARN] mismatching shape for param {k}: ckpt {v.shape} != model {state_dict[k].shape}, ignored.")
+                print(
+                    f"[WARN] mismatching shape for param {k}:" 
+                    f" ckpt {v.shape} != model {state_dict[k].shape}, ignored."
+                )
         else:
             print(f"[WARN] unexpected param {k}: {v.shape}")
     print("Finished loading pretrained weight.")
-    print("=" * 80)
+    # print("=" * 80)
     return model
 
 
@@ -177,9 +180,9 @@ def run_inference(image_path, motion_name, output_path, flametracking, lam, cfg)
             shape_param=shape_param, test_sample=False, cross_id=False,
             src_driven=src_driven,
         )
-
         # run model inference
         motion_seq["flame_params"]["betas"] = shape_param.unsqueeze(0)
+        torch.save(motion_seq, os.path.join("./", "motion_seq.pt"))
         device, dtype = "cuda", torch.float32
         print("Running LAM inference...")
         with torch.no_grad():
@@ -265,18 +268,18 @@ def main():
     original_argv = sys.argv
     sys.argv = [sys.argv[0], f"model_name={args.model_name}"]
 
-    print("Loading config...")
+    # print("Loading config...")
     cfg, _ = parse_configs()
 
     # clear sys.argv to avoid conflicts with FlameTrackingSingleImage._parse_args
     sys.argv = [original_argv[0]]
 
-    print("Building LAM model...")
+    # print("Building LAM model...")
     lam = build_model(cfg)
     lam.to('cuda')
     lam.eval()
 
-    print("Initializing flame tracking...")
+    # print("Initializing flame tracking...")
     flametracking = FlameTrackingSingleImage(
         output_dir='output/tracking',
         alignment_model_path='./model_zoo/flame_tracking_models/68_keypoints_model.pkl',
