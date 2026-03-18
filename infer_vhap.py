@@ -20,54 +20,56 @@ from lam.runners.infer.vhap_motion import VhapMotionLoader
 from tools.flame_tracking_single_image import FlameTrackingSingleImage
 
 
-def run_inference(image_path, motion_dir, output_path, flametracking, lam, cfg):
+def run_inference(avatar_dir, output_path, flametracking, lam, cfg):
     """Run the full inference pipeline using a lightweight motion directory."""
     with tempfile.TemporaryDirectory() as tmpdir:
         # save raw input
-        image_raw = os.path.join(tmpdir, "raw.png")
-        with Image.open(image_path).convert('RGB') as img:
-            img.save(image_raw)
+        # image_raw = os.path.join(tmpdir, "raw.png")
+        # with Image.open(image_path).convert('RGB') as img:
+        #     img.save(image_raw)
 
-        # flame tracking on input image
-        print("Running flame tracking...")
-        return_code = flametracking.preprocess(image_raw)
-        assert return_code == 0, "flametracking preprocess failed!"
-        return_code = flametracking.optimize()
-        assert return_code == 0, "flametracking optimize failed!"
-        return_code, output_dir = flametracking.export()
-        assert return_code == 0, "flametracking export failed!"
+        # # flame tracking on input image
+        # print("Running flame tracking...")
+        # return_code = flametracking.preprocess(image_raw)
+        # assert return_code == 0, "flametracking preprocess failed!"
+        # return_code = flametracking.optimize()
+        # assert return_code == 0, "flametracking optimize failed!"
+        # return_code, output_dir = flametracking.export()
+        # assert return_code == 0, "flametracking export failed!"
 
-        tracked_image_path = os.path.join(output_dir, "images/00000_00.png")
-        mask_path = os.path.join(output_dir, "fg_masks/00000_00.png")
-        print(f"Tracked image: {tracked_image_path}")
-        print(f"Mask: {mask_path}")
+        # tracked_image_path = os.path.join(output_dir, "images/00000_00.png")
+        # mask_path = os.path.join(output_dir, "fg_masks/00000_00.png")
+        # print(f"Tracked image: {tracked_image_path}")
+        # print(f"Mask: {mask_path}")
 
-        aspect_standard = 1.0
-        source_size = cfg.source_size
-        render_size = cfg.render_size
-        render_fps = 30
+        # aspect_standard = 1.0
+        # source_size = cfg.source_size
+        # render_size = cfg.render_size
+        # render_fps = 30
 
         # prepare reference image
+        image_path = os.path.join(avatar_dir, "foreground_image.png")
+        # mask_path = os.path.join(avatar_dir, "000000_mask.jpg")
         image, _, _, shape_param = preprocess_image(
-            tracked_image_path, mask_path=mask_path, intr=None, pad_ratio=0,
-            bg_color=1., max_tgt_size=None, aspect_standard=aspect_standard,
-            enlarge_ratio=[1.0, 1.0], render_tgt_size=source_size, multiply=14,
-            need_mask=True, get_shape_param=True,
+            image_path, mask_path=None, intr=None, pad_ratio=0,
+            bg_color=1., max_tgt_size=None, aspect_standard=1.0,
+            enlarge_ratio=[1.0, 1.0], render_tgt_size=cfg.source_size, multiply=14,
+            need_mask=False, get_shape_param=False,
         )
 
         # prepare motion sequence using VHAP loader
         vis_motion = cfg.get("vis_motion", False)
-        loader = VhapMotionLoader(motion_dir)
+        loader = VhapMotionLoader(avatar_dir)
         motion_seq = loader.prepare(
             bg_color=1.,
             shape_param=shape_param,
             vis_motion=vis_motion,
-            render_image_res=render_size,
+            render_image_res=cfg.render_size,
             test_sample=False,
         )
 
         # run model inference
-        motion_seq["flame_params"]["betas"] = shape_param.unsqueeze(0)
+        # motion_seq["flame_params"]["betas"] = shape_param.unsqueeze(0)
         # torch.save(motion_seq, os.path.join("./", "motion_seq.pt"))
         device, dtype = "cuda", torch.float32
         print("Running LAM inference...")
@@ -99,11 +101,11 @@ def run_inference(image_path, motion_dir, output_path, flametracking, lam, cfg):
         # save video
         os.makedirs(os.path.dirname(output_path), exist_ok=True)
         tmp_video = os.path.join(tmpdir, "output_noaudio.mp4")
-        save_images2video(rgb, tmp_video, render_fps)
+        save_images2video(rgb, tmp_video, fps=30)
 
         # add audio if available
-        motion_basename = os.path.basename(motion_dir.rstrip('/'))
-        audio_path = os.path.join(motion_dir, f"{motion_basename}.wav")
+        avatar_basename = os.path.basename(avatar_dir.rstrip('/'))
+        audio_path = os.path.join(avatar_dir, f"{avatar_basename}.wav")
         if os.path.exists(audio_path):
             add_audio_to_video(tmp_video, output_path, audio_path)
         else:
@@ -116,12 +118,11 @@ def run_inference(image_path, motion_dir, output_path, flametracking, lam, cfg):
 
 def main():
     parser = argparse.ArgumentParser(description="LAM CLI Inference (Lightweight Motion Format)")
-    parser.add_argument("--image", type=str, required=True,
-                        help="Path to input face image")
-    parser.add_argument("--motion", type=str, required=True,
-                        help="Path to lightweight motion directory (containing flame_param.npz)")
+    # parser.add_argument("--image", type=str, required=True, help="Path to input face image")
+    parser.add_argument("-a","--avatar", type=str, required=True,
+                        help="Path to avatar directory (containing flame_param.npz)")
     parser.add_argument("--output", type=str, default=None,
-                        help="Output video path (default: output/videos/<image>_<motion>.mp4)")
+                        help="Output video path (default: output/videos/<avatar>.mp4)")
     parser.add_argument("--model_name", type=str,
                         default="./model_zoo/lam_models/releases/lam/lam-20k/step_045500/",
                         help="Path to model checkpoint directory")
@@ -130,19 +131,14 @@ def main():
                         help="Inference config yaml")
     args = parser.parse_args()
 
-    # validate inputs
-    if not os.path.exists(args.image):
-        print(f"Error: image not found: {args.image}")
-        sys.exit(1)
-    if not os.path.isdir(args.motion):
-        print(f"Error: motion directory not found: {args.motion}")
+    if not os.path.isdir(args.avatar):
+        print(f"Error: avatar directory not found: {args.avatar}")
         sys.exit(1)
 
     # set default output path
     if args.output is None:
-        img_name = os.path.splitext(os.path.basename(args.image))[0]
-        motion_name = os.path.basename(args.motion.rstrip('/'))
-        args.output = os.path.join("output", "videos", f"{img_name}_{motion_name}.mp4")
+        avatar_name = os.path.basename(args.avatar.rstrip('/'))
+        args.output = os.path.join("output", "videos", f"{avatar_name}.mp4")
 
     # set env vars for parse_configs compatibility
     os.environ.update({
@@ -167,16 +163,15 @@ def main():
     lam.to('cuda')
     lam.eval()
 
-    flametracking = FlameTrackingSingleImage(
-        output_dir='output/tracking',
-        alignment_model_path='./model_zoo/flame_tracking_models/68_keypoints_model.pkl',
-        vgghead_model_path='./model_zoo/flame_tracking_models/vgghead/vgg_heads_l.trcd',
-        human_matting_path='./model_zoo/flame_tracking_models/matting/stylematte_synth.pt',
-        facebox_model_path='./model_zoo/flame_tracking_models/FaceBoxesV2.pth',
-        detect_iris_landmarks=False,
-    )
-
-    run_inference(args.image, args.motion, args.output, flametracking, lam, cfg)
+    # flametracking = FlameTrackingSingleImage(
+    #     output_dir='output/tracking',
+    #     alignment_model_path='./model_zoo/flame_tracking_models/68_keypoints_model.pkl',
+    #     vgghead_model_path='./model_zoo/flame_tracking_models/vgghead/vgg_heads_l.trcd',
+    #     human_matting_path='./model_zoo/flame_tracking_models/matting/stylematte_synth.pt',
+    #     facebox_model_path='./model_zoo/flame_tracking_models/FaceBoxesV2.pth',
+    #     detect_iris_landmarks=False,
+    # )
+    run_inference(args.avatar, args.output, None, lam, cfg)
 
 
 if __name__ == '__main__':
