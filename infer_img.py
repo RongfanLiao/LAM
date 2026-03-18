@@ -7,11 +7,9 @@
 import os
 import sys
 import argparse
-import tempfile
 
 import cv2
 import numpy as np
-from PIL import Image
 import torch
 
 from inference import build_model, parse_configs, save_images2video, add_audio_to_video
@@ -22,94 +20,100 @@ from tools.flame_tracking_single_image import FlameTrackingSingleImage
 
 def run_inference(image_path, motion_dir, output_path, flametracking, lam, cfg):
     """Run the full inference pipeline using a lightweight motion directory."""
-    with tempfile.TemporaryDirectory() as tmpdir:
-        # save raw input
-        image_raw = os.path.join(tmpdir, "raw.png")
-        with Image.open(image_path).convert('RGB') as img:
-            img.save(image_raw)
+    # flame tracking on input image
+    print("Running flame tracking...")
+    return_code = flametracking.preprocess(image_path)
+    assert return_code == 0, "flametracking preprocess failed!"
+    return_code = flametracking.optimize()
+    assert return_code == 0, "flametracking optimize failed!"
+    return_code, output_dir = flametracking.export()
+    assert return_code == 0, "flametracking export failed!"
 
-        # flame tracking on input image
-        print("Running flame tracking...")
-        return_code = flametracking.preprocess(image_raw)
-        assert return_code == 0, "flametracking preprocess failed!"
-        return_code = flametracking.optimize()
-        assert return_code == 0, "flametracking optimize failed!"
-        return_code, output_dir = flametracking.export()
-        assert return_code == 0, "flametracking export failed!"
+    tracked_image_path = os.path.join(output_dir, "images/00000_00.png")
+    mask_path = os.path.join(output_dir, "fg_masks/00000_00.png")
+    print(f"Tracked image: {tracked_image_path}")
+    print(f"Mask: {mask_path}")
 
-        tracked_image_path = os.path.join(output_dir, "images/00000_00.png")
-        mask_path = os.path.join(output_dir, "fg_masks/00000_00.png")
-        print(f"Tracked image: {tracked_image_path}")
-        print(f"Mask: {mask_path}")
+    aspect_standard = 1.0
+    source_size = cfg.source_size
+    render_size = cfg.render_size
+    render_fps = 30
 
-        aspect_standard = 1.0
-        source_size = cfg.source_size
-        render_size = cfg.render_size
-        render_fps = 30
+    # prepare reference image
+    image, _, _, shape_param = preprocess_image(
+        tracked_image_path, mask_path=mask_path, intr=None, pad_ratio=0,
+        bg_color=1., max_tgt_size=None, aspect_standard=aspect_standard,
+        enlarge_ratio=[1.0, 1.0], render_tgt_size=source_size, multiply=14,
+        need_mask=False, get_shape_param=True,
+    )
 
-        # prepare reference image
-        image, _, _, shape_param = preprocess_image(
-            tracked_image_path, mask_path=mask_path, intr=None, pad_ratio=0,
-            bg_color=1., max_tgt_size=None, aspect_standard=aspect_standard,
-            enlarge_ratio=[1.0, 1.0], render_tgt_size=source_size, multiply=14,
-            need_mask=False, get_shape_param=True,
+    # prepare motion sequence using VHAP loader
+    vis_motion = cfg.get("vis_motion", False)
+    loader = VhapMotionLoader(motion_dir)
+    motion_seq = loader.prepare(
+        bg_color=1.,
+        shape_param=shape_param,
+        vis_motion=vis_motion,
+        render_image_res=render_size,
+        test_sample=False,
+    )
+
+    # run model inference
+    motion_seq["flame_params"]["betas"] = shape_param.unsqueeze(0)
+    # torch.save(motion_seq, os.path.join("./", "motion_seq.pt"))
+    device, dtype = "cuda", torch.float32
+    print("Running LAM inference...")
+    with torch.no_grad():
+        res = lam.infer_single_view(
+            image.unsqueeze(0).to(device, dtype), None, None,
+            render_c2ws=motion_seq["render_c2ws"].to(device),
+            render_intrs=motion_seq["render_intrs"].to(device),
+            render_bg_colors=motion_seq["render_bg_colors"].to(device),
+            flame_params={k: v.to(device) for k, v in motion_seq["flame_params"].items()},
         )
 
-        # prepare motion sequence using VHAP loader
-        vis_motion = cfg.get("vis_motion", False)
-        loader = VhapMotionLoader(motion_dir)
-        motion_seq = loader.prepare(
-            bg_color=1.,
-            shape_param=shape_param,
-            vis_motion=vis_motion,
-            render_image_res=render_size,
-            test_sample=False,
+    # compose output frames
+    rgb = res["comp_rgb"].detach().cpu().numpy()
+    mask = res["comp_mask"].detach().cpu().numpy()
+    mask[mask < 0.5] = 0.0
+    rgb = rgb * mask + (1 - mask) * 1
+    rgb = (np.clip(rgb, 0, 1.0) * 255).astype(np.uint8)
+
+    if vis_motion:
+        vis_ref_img = (image[0].permute(1, 2, 0).cpu().detach().numpy() * 255).astype(np.uint8)
+        vis_ref_img = np.tile(
+            cv2.resize(vis_ref_img, (rgb[0].shape[1], rgb[0].shape[0]),
+                       interpolation=cv2.INTER_AREA)[None, :, :, :],
+            (rgb.shape[0], 1, 1, 1),
         )
+        rgb = np.concatenate([vis_ref_img, rgb, motion_seq["vis_motion_render"]], axis=2)
 
-        # run model inference
-        motion_seq["flame_params"]["betas"] = shape_param.unsqueeze(0)
-        # torch.save(motion_seq, os.path.join("./", "motion_seq.pt"))
-        device, dtype = "cuda", torch.float32
-        print("Running LAM inference...")
-        with torch.no_grad():
-            res = lam.infer_single_view(
-                image.unsqueeze(0).to(device, dtype), None, None,
-                render_c2ws=motion_seq["render_c2ws"].to(device),
-                render_intrs=motion_seq["render_intrs"].to(device),
-                render_bg_colors=motion_seq["render_bg_colors"].to(device),
-                flame_params={k: v.to(device) for k, v in motion_seq["flame_params"].items()},
-            )
+    # save video
+    output_dirname = os.path.dirname(output_path)
+    if output_dirname:
+        os.makedirs(output_dirname, exist_ok=True)
 
-        # compose output frames
-        rgb = res["comp_rgb"].detach().cpu().numpy()
-        mask = res["comp_mask"].detach().cpu().numpy()
-        mask[mask < 0.5] = 0.0
-        rgb = rgb * mask + (1 - mask) * 1
-        rgb = (np.clip(rgb, 0, 1.0) * 255).astype(np.uint8)
+    motion_basename = os.path.basename(motion_dir.rstrip('/'))
+    audio_path = os.path.join(motion_dir, f"{motion_basename}.wav")
+    has_audio = os.path.exists(audio_path)
+    video_output_path = output_path
+    tmp_video = None
 
-        if vis_motion:
-            vis_ref_img = (image[0].permute(1, 2, 0).cpu().detach().numpy() * 255).astype(np.uint8)
-            vis_ref_img = np.tile(
-                cv2.resize(vis_ref_img, (rgb[0].shape[1], rgb[0].shape[0]),
-                           interpolation=cv2.INTER_AREA)[None, :, :, :],
-                (rgb.shape[0], 1, 1, 1),
-            )
-            rgb = np.concatenate([vis_ref_img, rgb, motion_seq["vis_motion_render"]], axis=2)
+    if has_audio:
+        output_root, output_ext = os.path.splitext(output_path)
+        tmp_video = f"{output_root}_noaudio{output_ext or '.mp4'}"
+        video_output_path = tmp_video
 
-        # save video
-        os.makedirs(os.path.dirname(output_path), exist_ok=True)
-        tmp_video = os.path.join(tmpdir, "output_noaudio.mp4")
-        save_images2video(rgb, tmp_video, render_fps)
+    save_images2video(rgb, video_output_path, render_fps)
 
-        # add audio if available
-        motion_basename = os.path.basename(motion_dir.rstrip('/'))
-        audio_path = os.path.join(motion_dir, f"{motion_basename}.wav")
-        if os.path.exists(audio_path):
+    if has_audio:
+        try:
             add_audio_to_video(tmp_video, output_path, audio_path)
-        else:
-            import shutil
-            shutil.copy2(tmp_video, output_path)
-            print(f"No audio found at {audio_path}, saved video without audio.")
+        finally:
+            if os.path.exists(tmp_video):
+                os.remove(tmp_video)
+    else:
+        print(f"No audio found at {audio_path}, saved video without audio.")
 
     print(f"Done! Output: {output_path}")
 
